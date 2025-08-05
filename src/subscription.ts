@@ -270,23 +270,17 @@ export class FirehoseSubscription {
         }
       }
 
-      // Method 2: Try AT Protocol identity resolution
+      // Method 2: Fallback to AT Protocol repo description
       try {
-        const atProtoResponse = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${did}`, {
-          headers: { 'User-Agent': 'SelfQuoteFeedGenerator/1.0' },
-          signal: AbortSignal.timeout(3000) // 3 second timeout
-        })
-        
-        if (atProtoResponse.ok) {
-          const data = await atProtoResponse.json() as any
-          if (data.handle) {
-            // Cache and return the resolved handle
-            this.didCache.set(did, data.handle)
-            return data.handle
-          }
+        const res = await this.agent.api.com.atproto.repo.describeRepo({ repo: did })
+        const handle = res.data.handle
+        if (handle) {
+          // Cache and return the resolved handle
+          this.didCache.set(did, handle)
+          return handle
         }
-      } catch (atProtoError) {
-        // Continue to failure case
+      } catch (err) {
+        // Silently fail and move on
       }
 
       // Cache failure to avoid repeated requests for 5 minutes
