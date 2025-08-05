@@ -1,0 +1,45 @@
+{
+  "name": "self-quote-feed",
+  "version": "1.0.0",
+  "description": "A Bluesky feed generator that finds posts where people quote themselves",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx --watch src/index.ts",
+    "setup": "tsx scripts/setup.ts",
+    "publishFeed": "tsx scripts/publishFeedGen.ts",
+    "test": "tsx scripts/test.ts",
+    "test:api": "tsx scripts/test-api.ts"
+  },
+  "dependencies": {
+    "@atproto/api": "^0.12.25",
+    "@atproto/identity": "^0.4.0",
+    "@atproto/lexicon": "^0.4.0",
+    "@atproto/repo": "^0.4.0",
+    "@atproto/syntax": "^0.3.0",
+    "@atproto/xrpc": "^0.5.0",
+    "@atproto/xrpc-server": "^0.5.0",
+
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "helmet": "^7.1.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.6",
+    "@types/ws": "^8.5.10",
+    "node-fetch": "^2.7.0",
+    "@types/node-fetch": "^2.6.9",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
