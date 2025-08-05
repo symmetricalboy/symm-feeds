@@ -36,6 +36,8 @@ export class FirehoseSubscription {
   private postCount: number = 0
   private debugUrlCount: number = 0
   private skippedCount: number = 0
+  private resolvedCount: number = 0
+  private didCache: Map<string, string | null> = new Map()
 
   constructor(db: InMemoryDatabase) {
     this.db = db
@@ -54,7 +56,7 @@ export class FirehoseSubscription {
       const postCount = this.db.getPostCount()
       const uniqueAuthors = this.db.getUniqueAuthors()
       console.log(`📊 Feed status - ${postCount} self-quote posts from ${uniqueAuthors} unique authors`)
-      console.log(`📈 Processing stats - Examined: ${this.postCount}, Skipped: ${this.skippedCount}, Total events: ${this.eventCount}`)
+      console.log(`📈 Processing stats - Examined: ${this.postCount}, Skipped: ${this.skippedCount}, Resolved: ${this.resolvedCount}, Total events: ${this.eventCount}`)
     }, 30000)
   }
 
@@ -133,21 +135,36 @@ export class FirehoseSubscription {
       return
     }
     
-    // Get author handle from identity if available
+    // Get author handle from identity if available, or resolve from DID
     let authorHandle = event.identity?.handle
     
-    // Skip posts where we don't have a real handle (can't detect self-quotes without it)
+    // If we don't have a handle but have a DID, try to resolve it
     if (!authorHandle || authorHandle.startsWith('did:plc:')) {
-      if (!this.skippedCount) this.skippedCount = 0
-      this.skippedCount++
+      const resolvedHandle = await this.resolveDidToHandle(authorDid)
       
-      if (this.skippedCount <= 3) {
-        console.log(`⏭️  Skipped post ${this.skippedCount}: No valid handle (author: ${event.identity?.handle || 'no identity'})`)
-      } else if (this.skippedCount === 4) {
-        console.log(`⏭️  Skipping posts without valid handles (will log stats periodically)`)
+      if (!resolvedHandle) {
+        if (!this.skippedCount) this.skippedCount = 0
+        this.skippedCount++
+        
+        if (this.skippedCount <= 3) {
+          console.log(`⏭️  Skipped post ${this.skippedCount}: Could not resolve DID to handle (${authorDid})`)
+        } else if (this.skippedCount === 4) {
+          console.log(`⏭️  Skipping posts where DID resolution fails (will log stats periodically)`)
+        }
+        
+        return
+      } else {
+        // Successfully resolved DID to handle
+        authorHandle = resolvedHandle
+        if (!this.resolvedCount) this.resolvedCount = 0
+        this.resolvedCount++
+        
+        if (this.resolvedCount <= 5) {
+          console.log(`🔍 Resolved DID ${this.resolvedCount}: ${authorDid} → ${authorHandle}`)
+        } else if (this.resolvedCount === 6) {
+          console.log(`🔍 DID resolution working (will log stats periodically)`)
+        }
       }
-      
-      return
     }
     
     // Ensure handle has proper format
@@ -182,19 +199,19 @@ export class FirehoseSubscription {
       console.log(`   Text: "${postText}"`)
       console.log(`   Detection result: ${detection.isSelfQuote ? `✅ MATCH (${detection.type})` : '❌ No match'}`)
     }
-    
-    if (detection.isSelfQuote) {
+      
+      if (detection.isSelfQuote) {
       const postUri = `at://${authorDid}/app.bsky.feed.post/${event.commit.rkey}`
       
       // Store the self-quote post
-      this.db.insertPost({
+        this.db.insertPost({
         uri: postUri,
         cid: event.commit.rev,
         authorDid: authorDid,
         authorHandle: authorHandle,
         text: postText,
-        selfQuoteType: detection.type!,
-        matchedUrl: detection.matchedUrl!,
+          selfQuoteType: detection.type!,
+          matchedUrl: detection.matchedUrl!,
         indexedAt: post.createdAt || new Date().toISOString()
       })
       
@@ -208,5 +225,56 @@ export class FirehoseSubscription {
       this.ws.close()
     }
     console.log('🛑 Jetstream subscription stopped')
+  }
+
+  /**
+   * Resolve a DID to a handle using PLC directory
+   * Returns null if resolution fails
+   */
+  private async resolveDidToHandle(did: string): Promise<string | null> {
+    // Check cache first
+    if (this.didCache.has(did)) {
+      return this.didCache.get(did)!
+    }
+
+    try {
+      // Resolve DID using PLC directory
+      const response = await fetch(`https://web.plc.directory/${did}`)
+      
+      if (!response.ok) {
+        // Cache failure to avoid repeated requests
+        this.didCache.set(did, null)
+        return null
+      }
+
+      const didDocument = await response.json() as any
+      
+      // Extract handle from alsoKnownAs field
+      const alsoKnownAs = didDocument.alsoKnownAs
+      if (!Array.isArray(alsoKnownAs)) {
+        this.didCache.set(did, null)
+        return null
+      }
+
+      // Look for handle in format: at://username.bsky.social
+      for (const alias of alsoKnownAs) {
+        if (typeof alias === 'string' && alias.startsWith('at://')) {
+          const handle = alias.replace('at://', '')
+          // Cache and return the resolved handle
+          this.didCache.set(did, handle)
+          return handle
+        }
+      }
+
+      // No valid handle found
+      this.didCache.set(did, null)
+      return null
+      
+    } catch (error) {
+      console.error(`❌ Failed to resolve DID ${did}:`, error)
+      // Cache failure to avoid repeated requests
+      this.didCache.set(did, null)
+      return null
+    }
   }
 }
