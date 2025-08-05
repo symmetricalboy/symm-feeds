@@ -19,6 +19,7 @@ const run = async () => {
 
   // Auto-detect Railway domain or use localhost
   const hostname = 
+    process.env.FEEDGEN_HOSTNAME ||
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     process.env.RAILWAY_STATIC_URL?.replace('https://', '') ||
     'localhost'
