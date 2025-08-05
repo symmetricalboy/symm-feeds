@@ -8,8 +8,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci
 
 # Copy source code
 COPY src/ ./src/
@@ -17,6 +17,9 @@ COPY scripts/ ./scripts/
 
 # Build TypeScript
 RUN npm run build
+
+# Remove dev dependencies to keep image smaller
+RUN npm prune --production
 
 # Expose port
 EXPOSE 3000
