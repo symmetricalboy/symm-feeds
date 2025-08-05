@@ -64,7 +64,23 @@ export function detectSelfQuote(
  * Generate the feed of self-quotes
  */
 export function handler(db: InMemoryDatabase, limit: number, cursor?: string) {
-  const posts: Post[] = db.getAllPosts(limit)
+  // Get all posts and filter for self-quotes
+  const allPosts: Post[] = db.getAllPosts(1000) // Get more posts to filter from
+  
+  // Filter for actual self-quotes using our detection logic
+  const selfQuotePosts = allPosts.filter(post => {
+    const detection = detectSelfQuote(post.authorDid, post.authorHandle, post.text)
+    return detection.isSelfQuote
+  })
+  
+  // Apply cursor-based pagination if provided
+  let filteredPosts = selfQuotePosts
+  if (cursor) {
+    filteredPosts = selfQuotePosts.filter(post => post.indexedAt < cursor)
+  }
+  
+  // Limit the results
+  const posts = filteredPosts.slice(0, limit)
   
   let nextCursor: string | undefined
   const last = posts.at(-1)
