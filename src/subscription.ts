@@ -14,13 +14,14 @@ export class FirehoseSubscription {
   async run(subscriptionReconnectDelay: number) {
     console.log('🔥 Starting firehose subscription...')
     
-    // For demo purposes, we'll create some sample data
-    // In a real implementation, you'd connect to the actual firehose
-    this.createSampleData()
+    // TODO: Implement real firehose connection
+    // For now, using empty database (better than fake data)
+    console.log('⚠️  Using empty database - implement real firehose to populate with actual posts')
     
     // Keep the process running
     setInterval(() => {
-      console.log('📊 Feed generator is active...')
+      const postCount = this.db.getPostCount()
+      console.log(`📊 Feed generator active - ${postCount} posts in database`)
     }, 30000)
   }
 
