@@ -35,6 +35,7 @@ export class FirehoseSubscription {
   private eventCount: number = 0
   private postCount: number = 0
   private debugUrlCount: number = 0
+  private skippedCount: number = 0
 
   constructor(db: InMemoryDatabase) {
     this.db = db
@@ -53,6 +54,7 @@ export class FirehoseSubscription {
       const postCount = this.db.getPostCount()
       const uniqueAuthors = this.db.getUniqueAuthors()
       console.log(`📊 Feed status - ${postCount} self-quote posts from ${uniqueAuthors} unique authors`)
+      console.log(`📈 Processing stats - Examined: ${this.postCount}, Skipped: ${this.skippedCount}, Total events: ${this.eventCount}`)
     }, 30000)
   }
 
@@ -132,7 +134,21 @@ export class FirehoseSubscription {
     }
     
     // Get author handle from identity if available
-    let authorHandle = event.identity?.handle || authorDid
+    let authorHandle = event.identity?.handle
+    
+    // Skip posts where we don't have a real handle (can't detect self-quotes without it)
+    if (!authorHandle || authorHandle.startsWith('did:plc:')) {
+      if (!this.skippedCount) this.skippedCount = 0
+      this.skippedCount++
+      
+      if (this.skippedCount <= 3) {
+        console.log(`⏭️  Skipped post ${this.skippedCount}: No valid handle (author: ${event.identity?.handle || 'no identity'})`)
+      } else if (this.skippedCount === 4) {
+        console.log(`⏭️  Skipping posts without valid handles (will log stats periodically)`)
+      }
+      
+      return
+    }
     
     // Ensure handle has proper format
     if (!authorHandle.includes('.')) {
