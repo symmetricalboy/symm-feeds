@@ -1,77 +1,152 @@
 import { BskyAgent } from '@atproto/api'
+import WebSocket from 'ws'
 import { InMemoryDatabase } from './db'
 import { detectSelfQuote } from './algos/self-quotes'
+
+interface JetstreamEvent {
+  did: string
+  time_us: number
+  kind: string
+  commit?: {
+    rev: string
+    operation: string
+    collection: string
+    rkey: string
+    record?: {
+      text?: string
+      createdAt: string
+      [key: string]: any
+    }
+  }
+  identity?: {
+    did: string
+    handle: string
+    displayName?: string
+    [key: string]: any
+  }
+}
 
 export class FirehoseSubscription {
   public db: InMemoryDatabase
   public agent: BskyAgent
+  private ws?: WebSocket
+  private reconnectDelay: number = 5000
+  private isRunning: boolean = false
 
   constructor(db: InMemoryDatabase) {
     this.db = db
     this.agent = new BskyAgent({ service: 'https://bsky.social' })
   }
 
-  async run(subscriptionReconnectDelay: number) {
-    console.log('🔥 Starting firehose subscription...')
+  async run(subscriptionReconnectDelay: number = 5000) {
+    this.reconnectDelay = subscriptionReconnectDelay
+    this.isRunning = true
     
-    // TODO: Implement real firehose connection
-    // For now, using empty database (better than fake data)
-    console.log('⚠️  Using empty database - implement real firehose to populate with actual posts')
+    console.log('🔥 Starting Jetstream firehose subscription...')
+    await this.connect()
     
-    // Keep the process running
+    // Status logging
     setInterval(() => {
       const postCount = this.db.getPostCount()
-      console.log(`📊 Feed generator active - ${postCount} posts in database`)
+      const uniqueAuthors = this.db.getUniqueAuthors()
+      console.log(`📊 Feed status - ${postCount} self-quote posts from ${uniqueAuthors} unique authors`)
     }, 30000)
   }
 
-  private createSampleData() {
-    console.log('📝 Creating sample self-quote posts...')
-    
-    const samplePosts = [
-      {
-        uri: 'at://did:plc:sample1/app.bsky.feed.post/abc123',
-        cid: 'sample-cid-1',
-        authorDid: 'did:plc:sample1',
-        authorHandle: 'alice.bsky.social',
-        text: 'Check out my profile! https://bsky.app/profile/alice.bsky.social',
-        indexedAt: new Date().toISOString()
-      },
-      {
-        uri: 'at://did:plc:sample2/app.bsky.feed.post/def456',
-        cid: 'sample-cid-2',
-        authorDid: 'did:plc:sample2',
-        authorHandle: 'bob.bsky.social',
-        text: 'Here\'s my latest post: https://bsky.app/profile/bob.bsky.social/post/xyz789',
-        indexedAt: new Date(Date.now() - 3600000).toISOString() // 1 hour ago
-      },
-      {
-        uri: 'at://did:plc:sample3/app.bsky.feed.post/ghi789',
-        cid: 'sample-cid-3',
-        authorDid: 'did:plc:sample3',
-        authorHandle: 'charlie.bsky.social',
-        text: 'Follow me at https://bsky.app/profile/charlie.bsky.social for more updates!',
-        indexedAt: new Date(Date.now() - 7200000).toISOString() // 2 hours ago
-      }
-    ]
-
-    for (const post of samplePosts) {
-      const detection = detectSelfQuote(post.authorDid, post.authorHandle, post.text)
+  private async connect() {
+    try {
+      // Connect to Jetstream - a JSON-based AT Protocol firehose
+      this.ws = new WebSocket('wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post')
       
-      if (detection.isSelfQuote) {
-        this.db.insertPost({
-          uri: post.uri,
-          cid: post.cid,
-          authorDid: post.authorDid,
-          authorHandle: post.authorHandle,
-          text: post.text,
-          selfQuoteType: detection.type!,
-          matchedUrl: detection.matchedUrl!,
-          indexedAt: post.indexedAt
-        })
-        
-        console.log(`✅ Stored self-quote: ${post.authorHandle} -> ${detection.type}`)
-      }
+      this.ws.on('open', () => {
+        console.log('✅ Connected to Jetstream firehose')
+      })
+
+      this.ws.on('message', (data) => {
+        try {
+          const event: JetstreamEvent = JSON.parse(data.toString())
+          this.handleEvent(event)
+        } catch (error) {
+          console.error('⚠️  Failed to parse Jetstream event:', error)
+        }
+      })
+
+      this.ws.on('error', (error) => {
+        console.error('❌ Jetstream WebSocket error:', error)
+        this.reconnect()
+      })
+
+      this.ws.on('close', () => {
+        console.log('📡 Jetstream connection closed')
+        if (this.isRunning) {
+          this.reconnect()
+        }
+      })
+
+    } catch (error) {
+      console.error('❌ Failed to connect to Jetstream:', error)
+      this.reconnect()
     }
+  }
+
+  private reconnect() {
+    if (!this.isRunning) return
+    
+    console.log(`🔄 Reconnecting to Jetstream in ${this.reconnectDelay}ms...`)
+    setTimeout(() => {
+      if (this.isRunning) {
+        this.connect()
+      }
+    }, this.reconnectDelay)
+  }
+
+  private async handleEvent(event: JetstreamEvent) {
+    // Only process post creation events
+    if (event.kind !== 'commit' || 
+        event.commit?.operation !== 'create' || 
+        event.commit?.collection !== 'app.bsky.feed.post' ||
+        !event.commit?.record?.text) {
+      return
+    }
+
+    const post = event.commit.record
+    const authorDid = event.did
+    
+    // Get author handle from identity if available
+    let authorHandle = event.identity?.handle || authorDid
+    
+    // Ensure handle has proper format
+    if (!authorHandle.includes('.')) {
+      authorHandle = `${authorHandle}.bsky.social`
+    }
+
+    // Check if this post contains self-quotes
+    const detection = detectSelfQuote(authorDid, authorHandle, post.text)
+    
+    if (detection.isSelfQuote) {
+      const postUri = `at://${authorDid}/app.bsky.feed.post/${event.commit.rkey}`
+      
+      // Store the self-quote post
+      this.db.insertPost({
+        uri: postUri,
+        cid: event.commit.rev,
+        authorDid: authorDid,
+        authorHandle: authorHandle,
+        text: post.text,
+        selfQuoteType: detection.type!,
+        matchedUrl: detection.matchedUrl!,
+        indexedAt: post.createdAt || new Date().toISOString()
+      })
+      
+      console.log(`🎯 Found self-quote: @${authorHandle} -> ${detection.type} (${detection.matchedUrl})`)
+    }
+  }
+
+  public stop() {
+    this.isRunning = false
+    if (this.ws) {
+      this.ws.close()
+    }
+    console.log('🛑 Jetstream subscription stopped')
   }
 }
