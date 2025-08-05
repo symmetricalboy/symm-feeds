@@ -32,6 +32,8 @@ export class FirehoseSubscription {
   private ws?: WebSocket
   private reconnectDelay: number = 5000
   private isRunning: boolean = false
+  private eventCount: number = 0
+  private postCount: number = 0
 
   constructor(db: InMemoryDatabase) {
     this.db = db
@@ -101,6 +103,16 @@ export class FirehoseSubscription {
   }
 
   private async handleEvent(event: JetstreamEvent) {
+    // Debug: Log all events we receive (first 100)
+    if (!this.eventCount) this.eventCount = 0
+    this.eventCount++
+    
+    if (this.eventCount <= 100) {
+      console.log(`📨 Event ${this.eventCount}: ${event.kind} - ${event.commit?.collection || 'no collection'}`)
+    } else if (this.eventCount === 101) {
+      console.log('📨 Stopping event logging after 100 events (firehose is active)')
+    }
+
     // Only process post creation events
     if (event.kind !== 'commit' || 
         event.commit?.operation !== 'create' || 
@@ -124,6 +136,14 @@ export class FirehoseSubscription {
     // Ensure handle has proper format
     if (!authorHandle.includes('.')) {
       authorHandle = `${authorHandle}.bsky.social`
+    }
+
+    // Log every 100th post we examine
+    if (!this.postCount) this.postCount = 0
+    this.postCount++
+    
+    if (this.postCount % 100 === 0) {
+      console.log(`🔍 Examined ${this.postCount} posts so far...`)
     }
 
     // Check if this post contains self-quotes
