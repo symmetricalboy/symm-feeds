@@ -111,6 +111,12 @@ export class FirehoseSubscription {
 
     const post = event.commit.record
     const authorDid = event.did
+    const postText = post.text
+    
+    // Ensure we have the required text content
+    if (!postText || typeof postText !== 'string') {
+      return
+    }
     
     // Get author handle from identity if available
     let authorHandle = event.identity?.handle || authorDid
@@ -121,7 +127,7 @@ export class FirehoseSubscription {
     }
 
     // Check if this post contains self-quotes
-    const detection = detectSelfQuote(authorDid, authorHandle, post.text)
+    const detection = detectSelfQuote(authorDid, authorHandle, postText)
     
     if (detection.isSelfQuote) {
       const postUri = `at://${authorDid}/app.bsky.feed.post/${event.commit.rkey}`
@@ -132,7 +138,7 @@ export class FirehoseSubscription {
         cid: event.commit.rev,
         authorDid: authorDid,
         authorHandle: authorHandle,
-        text: post.text,
+        text: postText,
         selfQuoteType: detection.type!,
         matchedUrl: detection.matchedUrl!,
         indexedAt: post.createdAt || new Date().toISOString()
