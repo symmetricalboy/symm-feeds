@@ -124,7 +124,7 @@ export class FeedGenerator {
 
   async start(): Promise<http.Server> {
     await this.firehose.run(3000) // 3 second reconnect delay
-    this.server = this.app.listen(this.cfg.port, () => {
+    this.server = this.app.listen(this.cfg.port, '0.0.0.0', () => {
       console.log(
         `🤖 Self Quote Feed Generator is running at http://${this.cfg.hostname}:${this.cfg.port}`,
       )

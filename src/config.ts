@@ -11,7 +11,7 @@ export interface Config {
 }
 
 export const cfg: Config = {
-  port: parseInt(process.env.FEEDGEN_PORT || '3000', 10),
+  port: parseInt(process.env.PORT || process.env.FEEDGEN_PORT || '3000', 10),
   hostname: process.env.FEEDGEN_HOSTNAME || 'localhost',
   serviceDid:
     process.env.FEEDGEN_SERVICE_DID || 'did:web:self-quote-feed.fly.dev',
