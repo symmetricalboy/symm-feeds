@@ -47,6 +47,10 @@ const run = async () => {
     createdAt: new Date().toISOString(),
   }
 
+  console.log(`📝 Publishing feed with service DID: ${serviceDid}`)
+  console.log(`🎯 Feed will be available at: at://${agent.session?.did}/app.bsky.feed.generator/self-quotes`)
+  console.log(`🌐 Service endpoint: https://${hostname}`)
+
   // Publish the feed generator
   try {
     await agent.com.atproto.repo.putRecord({
