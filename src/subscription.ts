@@ -34,6 +34,7 @@ export class FirehoseSubscription {
   private isRunning: boolean = false
   private eventCount: number = 0
   private postCount: number = 0
+  private debugUrlCount: number = 0
 
   constructor(db: InMemoryDatabase) {
     this.db = db
@@ -146,8 +147,25 @@ export class FirehoseSubscription {
       console.log(`🔍 Examined ${this.postCount} posts so far...`)
     }
 
+    // Debug: Log some sample posts to understand real-world formats
+    if (this.postCount <= 5) {
+      console.log(`📝 Sample post ${this.postCount}:`)
+      console.log(`   Author: ${authorHandle} (${authorDid})`)
+      console.log(`   Text: "${postText.substring(0, 200)}${postText.length > 200 ? '...' : ''}"`)
+    }
+
     // Check if this post contains self-quotes
     const detection = detectSelfQuote(authorDid, authorHandle, postText)
+    
+    // Debug: Log posts that contain bsky.app URLs (potential self-quotes)
+    if (postText.includes('bsky.app/profile/') && this.debugUrlCount < 10) {
+      if (!this.debugUrlCount) this.debugUrlCount = 0
+      this.debugUrlCount++
+      console.log(`🔗 URL post ${this.debugUrlCount}:`)
+      console.log(`   Author: ${authorHandle} (${authorDid})`)
+      console.log(`   Text: "${postText}"`)
+      console.log(`   Detection result: ${detection.isSelfQuote ? `✅ MATCH (${detection.type})` : '❌ No match'}`)
+    }
     
     if (detection.isSelfQuote) {
       const postUri = `at://${authorDid}/app.bsky.feed.post/${event.commit.rkey}`
