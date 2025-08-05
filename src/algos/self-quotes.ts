@@ -17,19 +17,21 @@ export function detectSelfQuote(
   authorHandle: string,
   text: string
 ): { isSelfQuote: boolean; type?: 'profile' | 'post'; matchedUrl?: string } {
-  // Regex patterns to match Bluesky URLs
-  const profileUrlPattern = /https?:\/\/(?:bsky\.app|staging\.bsky\.app)\/profile\/([a-zA-Z0-9:._-]+)/g
-  const postUrlPattern = /https?:\/\/(?:bsky\.app|staging\.bsky\.app)\/profile\/([a-zA-Z0-9:._-]+)\/post\/[a-zA-Z0-9]+/g
+  // Normalize the author handle for comparison
+  const normalizedHandle = authorHandle.replace(/^@/, '').toLowerCase()
+  const normalizedDid = authorDid.toLowerCase()
   
-  // Check for profile links first (more specific)
+  // More comprehensive regex patterns to match Bluesky URLs
+  const postUrlPattern = /https?:\/\/(?:bsky\.app|staging\.bsky\.app)\/profile\/([a-zA-Z0-9:._-]+)\/post\/([a-zA-Z0-9]+)/g
+  const profileUrlPattern = /https?:\/\/(?:bsky\.app|staging\.bsky\.app)\/profile\/([a-zA-Z0-9:._-]+)(?!\/post)/g
+  
+  // Check for post links first (more specific)
   const postMatches = Array.from(text.matchAll(postUrlPattern))
   for (const match of postMatches) {
-    const handleOrDidFromUrl = match[1]
+    const handleOrDidFromUrl = match[1].toLowerCase()
     
     // Check if the linked profile matches the author
-    if (handleOrDidFromUrl === authorDid || 
-        handleOrDidFromUrl === authorHandle ||
-        handleOrDidFromUrl === authorHandle.replace('@', '')) {
+    if (isMatchingIdentity(handleOrDidFromUrl, normalizedDid, normalizedHandle)) {
       return {
         isSelfQuote: true,
         type: 'post',
@@ -41,12 +43,10 @@ export function detectSelfQuote(
   // Check for profile links (less specific)
   const profileMatches = Array.from(text.matchAll(profileUrlPattern))
   for (const match of profileMatches) {
-    const handleOrDidFromUrl = match[1]
+    const handleOrDidFromUrl = match[1].toLowerCase()
     
     // Check if the linked profile matches the author
-    if (handleOrDidFromUrl === authorDid || 
-        handleOrDidFromUrl === authorHandle ||
-        handleOrDidFromUrl === authorHandle.replace('@', '')) {
+    if (isMatchingIdentity(handleOrDidFromUrl, normalizedDid, normalizedHandle)) {
       return {
         isSelfQuote: true,
         type: 'profile',
@@ -56,6 +56,38 @@ export function detectSelfQuote(
   }
   
   return { isSelfQuote: false }
+}
+
+/**
+ * Helper function to check if a URL identifier matches the author's identity
+ */
+function isMatchingIdentity(urlIdentifier: string, authorDid: string, authorHandle: string): boolean {
+  // Direct DID match
+  if (urlIdentifier === authorDid) {
+    return true
+  }
+  
+  // Direct handle match
+  if (urlIdentifier === authorHandle) {
+    return true
+  }
+  
+  // Handle without .bsky.social suffix
+  if (urlIdentifier === authorHandle.replace('.bsky.social', '')) {
+    return true
+  }
+  
+  // Handle with .bsky.social added if URL identifier doesn't have a domain
+  if (!urlIdentifier.includes('.') && urlIdentifier === authorHandle.replace('.bsky.social', '')) {
+    return true
+  }
+  
+  // Handle case where URL has .bsky.social but stored handle doesn't
+  if (urlIdentifier.endsWith('.bsky.social') && urlIdentifier === `${authorHandle.replace('.bsky.social', '')}.bsky.social`) {
+    return true
+  }
+  
+  return false
 }
 
 

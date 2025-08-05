@@ -56,7 +56,14 @@ export class FirehoseSubscription {
       const postCount = this.db.getPostCount()
       const uniqueAuthors = this.db.getUniqueAuthors()
       console.log(`📊 Feed status - ${postCount} self-quote posts from ${uniqueAuthors} unique authors`)
-      console.log(`📈 Processing stats - Examined: ${this.postCount}, Skipped: ${this.skippedCount}, Resolved: ${this.resolvedCount}, Total events: ${this.eventCount}`)
+      console.log(`📈 Processing stats - Examined: ${this.postCount || 0}, Skipped: ${this.skippedCount || 0}, Resolved: ${this.resolvedCount || 0}, Total events: ${this.eventCount || 0}`)
+      
+      // Calculate success rates
+      const totalProcessed = (this.postCount || 0) + (this.skippedCount || 0)
+      if (totalProcessed > 0) {
+        const successRate = ((this.postCount || 0) / totalProcessed * 100).toFixed(1)
+        console.log(`📈 Success rate: ${successRate}% posts processed successfully`)
+      }
     }, 30000)
   }
 
@@ -135,14 +142,32 @@ export class FirehoseSubscription {
       return
     }
     
-    // Get author handle from identity if available, or resolve from DID
+    // Get author handle from identity if available
     let authorHandle = event.identity?.handle
     
-    // If we don't have a handle but have a DID, try to resolve it
-    if (!authorHandle || authorHandle.startsWith('did:plc:')) {
+    // If we have a handle from the event, use it (this is the most reliable)
+    if (authorHandle && !authorHandle.startsWith('did:plc:')) {
+      // Ensure handle has proper format
+      if (!authorHandle.includes('.')) {
+        authorHandle = `${authorHandle}.bsky.social`
+      }
+    } else {
+      // Try to resolve DID to handle only if we don't have a valid handle
       const resolvedHandle = await this.resolveDidToHandle(authorDid)
       
-      if (!resolvedHandle) {
+      if (resolvedHandle) {
+        authorHandle = resolvedHandle
+        if (!this.resolvedCount) this.resolvedCount = 0
+        this.resolvedCount++
+        
+        if (this.resolvedCount <= 5) {
+          console.log(`🔍 Resolved DID ${this.resolvedCount}: ${authorDid} → ${authorHandle}`)
+        } else if (this.resolvedCount === 6) {
+          console.log(`🔍 DID resolution working (will log stats periodically)`)
+        }
+      } else {
+        // If we can't resolve DID to handle, skip this post for now
+        // but don't skip posts that might have handles in other ways
         if (!this.skippedCount) this.skippedCount = 0
         this.skippedCount++
         
@@ -153,23 +178,7 @@ export class FirehoseSubscription {
         }
         
         return
-      } else {
-        // Successfully resolved DID to handle
-        authorHandle = resolvedHandle
-        if (!this.resolvedCount) this.resolvedCount = 0
-        this.resolvedCount++
-        
-        if (this.resolvedCount <= 5) {
-          console.log(`🔍 Resolved DID ${this.resolvedCount}: ${authorDid} → ${authorHandle}`)
-        } else if (this.resolvedCount === 6) {
-          console.log(`🔍 DID resolution working (will log stats periodically)`)
-        }
       }
-    }
-    
-    // Ensure handle has proper format
-    if (!authorHandle.includes('.')) {
-      authorHandle = `${authorHandle}.bsky.social`
     }
 
     // Log every 100th post we examine
@@ -200,18 +209,18 @@ export class FirehoseSubscription {
       console.log(`   Detection result: ${detection.isSelfQuote ? `✅ MATCH (${detection.type})` : '❌ No match'}`)
     }
       
-      if (detection.isSelfQuote) {
+    if (detection.isSelfQuote) {
       const postUri = `at://${authorDid}/app.bsky.feed.post/${event.commit.rkey}`
       
       // Store the self-quote post
-        this.db.insertPost({
+      this.db.insertPost({
         uri: postUri,
         cid: event.commit.rev,
         authorDid: authorDid,
         authorHandle: authorHandle,
         text: postText,
-          selfQuoteType: detection.type!,
-          matchedUrl: detection.matchedUrl!,
+        selfQuoteType: detection.type!,
+        matchedUrl: detection.matchedUrl!,
         indexedAt: post.createdAt || new Date().toISOString()
       })
       
@@ -228,7 +237,7 @@ export class FirehoseSubscription {
   }
 
   /**
-   * Resolve a DID to a handle using PLC directory
+   * Resolve a DID to a handle using multiple methods
    * Returns null if resolution fails
    */
   private async resolveDidToHandle(did: string): Promise<string | null> {
@@ -238,42 +247,68 @@ export class FirehoseSubscription {
     }
 
     try {
-      // Resolve DID using PLC directory
-      const response = await fetch(`https://web.plc.directory/${did}`)
+      // Method 1: Try PLC directory first
+      const plcResponse = await fetch(`https://web.plc.directory/${did}`, {
+        headers: { 'User-Agent': 'SelfQuoteFeedGenerator/1.0' },
+        signal: AbortSignal.timeout(5000) // 5 second timeout
+      })
       
-      if (!response.ok) {
-        // Cache failure to avoid repeated requests
-        this.didCache.set(did, null)
-        return null
-      }
-
-      const didDocument = await response.json() as any
-      
-      // Extract handle from alsoKnownAs field
-      const alsoKnownAs = didDocument.alsoKnownAs
-      if (!Array.isArray(alsoKnownAs)) {
-        this.didCache.set(did, null)
-        return null
-      }
-
-      // Look for handle in format: at://username.bsky.social
-      for (const alias of alsoKnownAs) {
-        if (typeof alias === 'string' && alias.startsWith('at://')) {
-          const handle = alias.replace('at://', '')
-          // Cache and return the resolved handle
-          this.didCache.set(did, handle)
-          return handle
+      if (plcResponse.ok) {
+        const didDocument = await plcResponse.json() as any
+        
+        // Extract handle from alsoKnownAs field
+        const alsoKnownAs = didDocument.alsoKnownAs
+        if (Array.isArray(alsoKnownAs)) {
+          for (const alias of alsoKnownAs) {
+            if (typeof alias === 'string' && alias.startsWith('at://')) {
+              const handle = alias.replace('at://', '')
+              // Cache and return the resolved handle
+              this.didCache.set(did, handle)
+              return handle
+            }
+          }
         }
       }
 
-      // No valid handle found
+      // Method 2: Try AT Protocol identity resolution
+      try {
+        const atProtoResponse = await fetch(`https://bsky.social/xrpc/com.atproto.identity.resolveHandle?handle=${did}`, {
+          headers: { 'User-Agent': 'SelfQuoteFeedGenerator/1.0' },
+          signal: AbortSignal.timeout(3000) // 3 second timeout
+        })
+        
+        if (atProtoResponse.ok) {
+          const data = await atProtoResponse.json() as any
+          if (data.handle) {
+            // Cache and return the resolved handle
+            this.didCache.set(did, data.handle)
+            return data.handle
+          }
+        }
+      } catch (atProtoError) {
+        // Continue to failure case
+      }
+
+      // Cache failure to avoid repeated requests for 5 minutes
       this.didCache.set(did, null)
+      setTimeout(() => {
+        this.didCache.delete(did)
+      }, 5 * 60 * 1000)
+      
       return null
       
     } catch (error) {
-      console.error(`❌ Failed to resolve DID ${did}:`, error)
-      // Cache failure to avoid repeated requests
+      // Only log errors occasionally to avoid spam
+      if (Math.random() < 0.01) { // 1% chance
+        console.error(`❌ Failed to resolve DID ${did}:`, error)
+      }
+      
+      // Cache failure briefly
       this.didCache.set(did, null)
+      setTimeout(() => {
+        this.didCache.delete(did)
+      }, 30 * 1000) // 30 seconds for errors
+      
       return null
     }
   }
